@@ -1,1 +1,115 @@
-'s 
+name: Build APK from uploaded ZIP
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main", "master"]
+    paths:
+      - "*.zip"
+      - ".github/workflows/build-apk.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Find and extract uploaded Android project ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t ZIPS < <(find . -maxdepth 1 -type f -iname '*.zip' ! -name 'BlueWavePlayer-arm64-v8a-APK-ZIP.zip' | sort)
+          if [[ "${#ZIPS[@]}" -eq 0 ]]; then
+            echo "::error::No project ZIP found in repository root. Upload the Android project ZIP beside the .github folder."
+            exit 1
+          fi
+          if [[ "${#ZIPS[@]}" -gt 1 ]]; then
+            echo "::error::More than one ZIP found in repository root. Keep only one Android project ZIP."
+            printf '%s\n' "${ZIPS[@]}"
+            exit 1
+          fi
+          PROJECT_ZIP="${ZIPS[0]}"
+          echo "Using project archive: $PROJECT_ZIP"
+          mkdir -p "$GITHUB_WORKSPACE/project-src"
+          unzip -q "$PROJECT_ZIP" -d "$GITHUB_WORKSPACE/project-src"
+          SETTINGS_FILE="$(find "$GITHUB_WORKSPACE/project-src" -type f -name settings.gradle.kts -print -quit)"
+          if [[ -z "$SETTINGS_FILE" ]]; then
+            echo "::error::settings.gradle.kts was not found inside the uploaded ZIP."
+            exit 1
+          fi
+          PROJECT_DIR="$(dirname "$SETTINGS_FILE")"
+          if [[ ! -f "$PROJECT_DIR/gradlew" || ! -d "$PROJECT_DIR/app" ]]; then
+            echo "::error::The ZIP does not contain a complete Android Gradle project (gradlew/app missing)."
+            exit 1
+          fi
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Project root: $PROJECT_DIR"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK components
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Create temporary release signing key
+        shell: bash
+        run: |
+          set -euo pipefail
+          STORE_PASS="$(openssl rand -hex 24)"
+          KEY_PASS="$(openssl rand -hex 24)"
+          keytool -genkeypair -v \
+            -keystore "$GITHUB_WORKSPACE/bluewave-temporary.jks" \
+            -storepass "$STORE_PASS" \
+            -keypass "$KEY_PASS" \
+            -alias bluewave \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=BlueWave Player, O=BlueWave, C=BD"
+          {
+            echo "KEYSTORE_PATH=$GITHUB_WORKSPACE/bluewave-temporary.jks"
+            echo "STORE_PASSWORD=$STORE_PASS"
+            echo "KEY_ALIAS=bluewave"
+            echo "KEY_PASSWORD=$KEY_PASS"
+          } >> "$GITHUB_ENV"
+
+      - name: Build ARM64 release APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+          chmod +x ./gradlew
+          ./gradlew :app:assembleRelease --no-daemon --stacktrace
+
+      - name: Package the single ARM64 APK into ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="$(find "$PROJECT_DIR/app/build/outputs/apk/release" -type f -name '*.apk' -print -quit)"
+          if [[ -z "$APK" ]]; then
+            echo "::error::No release APK was generated."
+            find "$PROJECT_DIR/app/build/outputs/apk" -type f -print || true
+            exit 1
+          fi
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          cp "$APK" "$GITHUB_WORKSPACE/dist/BlueWavePlayer-arm64-v8a.apk"
+          (cd "$GITHUB_WORKSPACE/dist" && zip -9 BlueWavePlayer-arm64-v8a.zip BlueWavePlayer-arm64-v8a.apk)
+          ls -lh "$GITHUB_WORKSPACE/dist/"*
+
+      - name: Upload downloadable APK ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: BlueWavePlayer-arm64-v8a-APK-ZIP
+          path: dist/BlueWavePlayer-arm64-v8a.zip
+          if-no-files-found: error
+          retention-days: 30
