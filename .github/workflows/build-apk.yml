@@ -19,9 +19,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
       # 1. Checkout repository
       - name: Checkout repository
         uses: actions/checkout@v4
+
 
       # 2. Find and extract project ZIP
       - name: Extract Android project
@@ -61,39 +63,100 @@ jobs:
           echo "Project directory: $PROJ"
           echo "PROJ=$PROJ" >> "$GITHUB_ENV"
 
-      # 3. Setup Java
-      - name: Setup Java 17
+
+      # 3. Setup Java 17
+      - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
+
       # 4. Setup Android SDK
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+
       # 5. Accept Android SDK licenses
-      - name: Accept Android SDK licenses
+      - name: Accept Android SDK Licenses
+        shell: bash
         run: |
-          yes | sdkmanager --licenses > /dev/null || true
+          python3 - <<'PY'
+          import os
+          import subprocess
+          import sys
+
+          sdk = os.environ["ANDROID_HOME"]
+
+          candidates = [
+              os.path.join(
+                  sdk, "cmdline-tools", "latest",
+                  "bin", "sdkmanager"
+              )
+          ]
+
+          candidates += [
+              os.path.join(sdk, "cmdline-tools", version,
+                           "bin", "sdkmanager")
+              for version in os.listdir(
+                  os.path.join(sdk, "cmdline-tools")
+              )
+              if version != "latest"
+          ]
+
+          sdkmanager = next(
+              (p for p in candidates if os.path.isfile(p)),
+              None
+          )
+
+          if not sdkmanager:
+              sys.exit("sdkmanager not found!")
+
+          print("Using:", sdkmanager)
+
+          result = subprocess.run(
+              [sdkmanager, "--licenses"],
+              input=("y\n" * 100),
+              text=True,
+              stdout=subprocess.PIPE,
+              stderr=subprocess.STDOUT,
+              timeout=180
+          )
+
+          print(result.stdout[-5000:])
+
+          if result.returncode != 0:
+              sys.exit("SDK license acceptance failed!")
+
+          print("SDK license process completed.")
+          PY
+
 
       # 6. Setup Gradle
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      # 7. Build APK
+
+      # 7. Verify Gradle Wrapper
+      - name: Check Gradle
+        shell: bash
+        run: |
+          cd "$PROJ"
+          ./gradlew --version
+
+
+      # 8. Build Release APK
       - name: Build Release APK
         shell: bash
         run: |
           cd "$PROJ"
 
-          ./gradlew --version
-
           ./gradlew :app:assembleRelease \
             --no-daemon \
             --console=plain
 
-      # 8. Prepare APK ZIP
+
+      # 9. Prepare APK ZIP
       - name: Prepare APK ZIP
         shell: bash
         run: |
@@ -115,17 +178,20 @@ jobs:
 
           ls -lh BlueWavePlayer-APK.zip
 
-      # 9. Upload APK ZIP as artifact
+
+      # 10. Upload APK ZIP as GitHub Artifact
       - name: Upload APK ZIP
         uses: actions/upload-artifact@v4
         with:
           name: BlueWavePlayer-APK
           path: dist/BlueWavePlayer-APK.zip
 
-      # 10. Publish GitHub Release
+
+      # 11. Publish GitHub Release
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
         run: |
           TAG="v${{ github.run_number }}"
 
