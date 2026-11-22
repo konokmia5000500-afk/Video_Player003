@@ -20,7 +20,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Extract Android project ZIP
+      # 2. Extract project ZIP
       - name: Extract project ZIP
         shell: bash
         run: |
@@ -30,7 +30,7 @@ jobs:
             ! -iname "*apk*" | head -n 1)
 
           if [ -z "$ZIP" ]; then
-            echo "ERROR: Android project ZIP not found!"
+            echo "ERROR: Project ZIP not found!"
             exit 1
           fi
 
@@ -64,18 +64,30 @@ jobs:
         uses: android-actions/setup-android@v3
         with:
           accept-android-sdk-licenses: true
-          packages: |
-            platform-tools
-            platforms;android-36-ext1
-            build-tools;36.0.0
+          log-accepted-android-sdk-licenses: false
+          packages: ''
 
-      # 5. Setup Gradle 9.3.1
+      # 5. Install required Android SDK packages
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          set -e
+
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-36-ext1" \
+            "build-tools;36.0.0"
+
+          echo "Installed SDK packages:"
+          sdkmanager --list_installed
+
+      # 6. Setup Gradle
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "9.3.1"
 
-      # 6. Generate temporary signing key
+      # 7. Create signing key
       - name: Create signing key
         shell: bash
         run: |
@@ -89,7 +101,7 @@ jobs:
             -keypass videoplayer123 \
             -dname "CN=Video Player, O=VideoPlayer, C=US"
 
-      # 7. Build Release APK
+      # 8. Build Release APK
       - name: Build Release APK
         shell: bash
         env:
@@ -109,7 +121,7 @@ jobs:
             --console=plain \
             2>&1 | tee "$GITHUB_WORKSPACE/build.log"
 
-      # 8. Collect APK files
+      # 9. Collect APK files
       - name: Collect APK files
         shell: bash
         run: |
@@ -118,7 +130,7 @@ jobs:
           APK_DIR="$PROJ/app/build/outputs/apk/release"
 
           if [ ! -d "$APK_DIR" ]; then
-            echo "ERROR: Release APK directory not found!"
+            echo "ERROR: APK directory not found!"
             exit 1
           fi
 
@@ -135,7 +147,7 @@ jobs:
           echo "Generated APK files:"
           ls -lh dist/
 
-      # 9. Create APK ZIP
+      # 10. Create APK ZIP
       - name: Create APK ZIP
         shell: bash
         run: |
@@ -143,7 +155,7 @@ jobs:
           zip -j VideoPlayer-APKs.zip ./*.apk
           ls -lh VideoPlayer-APKs.zip
 
-      # 10. Upload APK Artifact
+      # 11. Upload APK Artifact
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
@@ -152,7 +164,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      # 11. Publish GitHub Release
+      # 12. Publish GitHub Release
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
